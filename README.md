@@ -19,7 +19,7 @@ This component contains the main functionality of the ATM, including connecting 
 4. Interact with the ATM: Deposit, withdraw, and view your balance and activity logs.
 
 ## Author
-- **Name**: Gamalliel Tamaca
+Gamalliel Tamaca
 
 ## License
 This project is licensed under the [MIT License](LICENSE).

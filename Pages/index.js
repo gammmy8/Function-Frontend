@@ -1,5 +1,4 @@
-
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import atm_abi from "../artifacts/contracts/Assessment.sol/Assessment.json";
 
@@ -8,23 +7,30 @@ export default function HomePage() {
   const [account, setAccount] = useState(undefined);
   const [atm, setATM] = useState(undefined);
   const [balance, setBalance] = useState(undefined);
-  const [recipientAddress, setRecipientAddress] = useState("");
-  const [amountToSend, setAmountToSend] = useState("");
-  const [message, setMessage] = useState("");
-  const [showAccount, setShowAccount] = useState(true);  // State to toggle account visibility
+  const [activities, setActivities] = useState([]);
+  const [ethPrice, setEthPrice] = useState(null);
 
   const contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3";
   const atmABI = atm_abi.abi;
 
   const getWallet = async () => {
     if (window.ethereum) {
-      setEthWallet(new ethers.providers.Web3Provider(window.ethereum));
+      setEthWallet(window.ethereum);
+    }
+
+    if (ethWallet) {
+      const account = await ethWallet.request({ method: "eth_accounts" });
+      handleAccount(account);
     }
   };
 
-  const handleAccount = async () => {
-    const accounts = await ethWallet.listAccounts();
-    setAccount(accounts[0]);
+  const handleAccount = (account) => {
+    if (account) {
+      console.log("Account connected: ", account);
+      setAccount(account[0]);
+    } else {
+      console.log("No account found");
+    }
   };
 
   const connectAccount = async () => {
@@ -33,138 +39,248 @@ export default function HomePage() {
       return;
     }
 
-    try {
-      await window.ethereum.request({ method: "eth_requestAccounts" });
-      handleAccount();
-    } catch (error) {
-      console.error("Error connecting account:", error);
-    }
+    const accounts = await ethWallet.request({ method: "eth_requestAccounts" });
+    handleAccount(accounts);
+
+    getATMContract();
   };
 
-  const getATMContract = async () => {
-    if (ethWallet) {
-      const signer = ethWallet.getSigner();
-      const atmContract = new ethers.Contract(contractAddress, atmABI, signer);
-      setATM(atmContract);
-    }
+  const getATMContract = () => {
+    const provider = new ethers.providers.Web3Provider(ethWallet);
+    const signer = provider.getSigner();
+    const atmContract = new ethers.Contract(contractAddress, atmABI, signer);
+
+    setATM(atmContract);
   };
 
   const getBalance = async () => {
     if (atm) {
-      const balance = await atm.getBalance();
-      setBalance(balance.toNumber());
+      const balanceBN = await atm.getBalance();
+      setBalance(ethers.utils.formatEther(balanceBN));
     }
   };
 
-  const deposit = async () => {
+  const deposit = async (amount) => {
     if (atm) {
-      try {
-        const tx = await atm.deposit(1);
+      const parsedAmount = ethers.utils.parseEther(amount);
+      let tx = await atm.deposit(parsedAmount, { value: parsedAmount });
+      await tx.wait();
+      getBalance();
+      getActivityLog();
+    }
+  };
+
+  const withdraw = async (amount) => {
+    if (atm) {
+      const parsedAmount = ethers.utils.parseEther(amount);
+      let tx = await atm.withdraw(parsedAmount);
+      await tx.wait();
+      getBalance();
+      getActivityLog();
+    }
+  };
+
+  const transfer = async (recipient, amount) => {
+    if (atm) {
+      const parsedAmount = ethers.utils.parseEther(amount);
+      if (balance >= parsedAmount) {
+        let tx = await atm.transfer(recipient, parsedAmount);
         await tx.wait();
         getBalance();
-      } catch (error) {
-        console.error("Error depositing:", error);
+        getActivityLog();
+      } else {
+        alert("Insufficient balance");
       }
     }
   };
 
-  const withdraw = async () => {
+  const getActivityLog = async () => {
     if (atm) {
-      try {
-        const tx = await atm.withdraw(1);
-        await tx.wait();
-        getBalance();
-      } catch (error) {
-        console.error("Error withdrawing:", error);
-      }
+      const activities = await atm.getRecentActivity();
+      setActivities(activities);
     }
   };
 
-  const sendETH = async () => {
-    if (ethWallet && recipientAddress && amountToSend) {
-      try {
-        const signer = ethWallet.getSigner();
-        const tx = await signer.sendTransaction({
-          to: recipientAddress,
-          value: ethers.utils.parseEther(amountToSend),
-        });
-        await tx.wait();
-        setMessage("Transfer complete");
-      } catch (error) {
-        console.error("Error sending ETH:", error);
-        setMessage("Transfer failed");
-      }
-    } else {
-      setMessage("Please enter a valid address and amount");
+  const fetchEthPrice = async () => {
+    try {
+      const response = await fetch(
+        "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd"
+      );
+      const data = await response.json();
+      setEthPrice(data.ethereum.usd);
+    } catch (error) {
+      console.error("Error fetching ETH price:", error);
     }
   };
 
-  const handleRecipientAddressChange = (event) => {
-    setRecipientAddress(event.target.value);
-  };
+  const initUser = () => {
+    if (!ethWallet) {
+      return <p>Please install MetaMask to use this ATM.</p>;
+    }
 
-  const handleAmountToSendChange = (event) => {
-    setAmountToSend(event.target.value);
-  };
+    if (!account) {
+      return <button onClick={connectAccount}>Connect MetaMask</button>;
+    }
 
-  const toggleAccountVisibility = () => {
-    setShowAccount(!showAccount); // Toggle the visibility state
+    if (balance === undefined) {
+      getBalance();
+    }
+
+    if (activities.length === 0) {
+      getActivityLog();
+    }
+
+    return (
+      <div>
+        <p>Your Account: {account}</p>
+        <p>Your Balance: {balance} ETH</p>
+        <p>Current ETH Price: {ethPrice ? `$${ethPrice}` : "Loading..."}</p>
+        <DepositForm onDeposit={deposit} />
+        <WithdrawForm onWithdraw={withdraw} />
+        <TransferForm onTransfer={transfer} />
+        <ActivityLog activities={activities} />
+      </div>
+    );
   };
 
   useEffect(() => {
     getWallet();
+    fetchEthPrice();
   }, []);
-
-  useEffect(() => {
-    if (ethWallet) {
-      handleAccount();
-      getATMContract();
-    }
-  }, [ethWallet]);
-
-  useEffect(() => {
-    getBalance();
-  }, [atm]);
 
   return (
     <main className="container">
       <header>
         <h1>Welcome to the Metacrafters ATM!</h1>
       </header>
-      {account ? (
-        <div>
-          <button onClick={toggleAccountVisibility}>
-            {showAccount ? "Hide Account" : "Show Account"}
-          </button>
-          {showAccount ? (
-            <div>
-              <p>Your Account: {account}</p>
-            </div>
-          ) : null}
-          <p>Your Balance: {balance}</p>
-          <button onClick={deposit}>Deposit 1 ETH</button>
-          <button onClick={withdraw}>Withdraw 1 ETH</button>
-          <div>
-            <label>
-              Recipient Address:
-              <input type="text" value={recipientAddress} onChange={handleRecipientAddressChange} />
-            </label>
-            <label>
-              Amount (ETH):
-              <input type="text" value={amountToSend} onChange={handleAmountToSendChange} />
-            </label>
-            <button onClick={sendETH}>Send ETH</button>
-            {message && <p>{message}</p>}
-          </div>
-        </div>
-      ) : (
-        <button onClick={connectAccount}>Please connect your Metamask wallet</button>
-      )}
+      {initUser()}
       <style jsx>{`
         .container {
           text-align: center;
         }
       `}</style>
     </main>
+  );
+}
+
+function DepositForm({ onDeposit }) {
+  const [amount, setAmount] = useState("");
+
+  const handleDeposit = () => {
+    if (amount) {
+      onDeposit(amount);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Deposit</h3>
+      <input
+        type="text"
+        placeholder="Amount"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <button onClick={handleDeposit}>Deposit</button>
+    </div>
+  );
+}
+
+function WithdrawForm({ onWithdraw }) {
+  const [amount, setAmount] = useState("");
+
+  const handleWithdraw = () => {
+    if (amount) {
+      onWithdraw(amount);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Withdraw</h3>
+      <input
+        type="text"
+        placeholder="Amount"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <button onClick={handleWithdraw}>Withdraw</button>
+    </div>
+  );
+}
+
+function TransferForm({ onTransfer }) {
+  const [recipient, setRecipient] = useState("");
+  const [amount, setAmount] = useState("");
+
+  const handleTransfer = () => {
+    if (recipient && amount) {
+      onTransfer(recipient, amount);
+    }
+  };
+
+  return (
+    <div>
+      <h3>Transfer</h3>
+      <input
+        type="text"
+        placeholder="Recipient Address"
+        value={recipient}
+        onChange={(e) => setRecipient(e.target.value)}
+      />
+      <input
+        type="text"
+        placeholder="Amount"
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+      />
+      <button onClick={handleTransfer}>Transfer</button>
+    </div>
+  );
+}
+
+function ActivityLog({ activities }) {
+  return (
+    <div className="activity-log">
+      <h3>Activity Log</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Amount</th>
+            <th>Recipient</th>
+            <th>Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {activities.map((activity, index) => (
+            <tr key={index}>
+              <td>{activity.action}</td>
+              <td>{ethers.utils.formatEther(activity.amount)} ETH</td>
+              <td>{activity.recipient}</td>
+              <td>{new Date(activity.timestamp * 1000).toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <style jsx>{`
+        .activity-log {
+          margin-top: 20px;
+          text-align: left;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+        th, td {
+          padding: 8px;
+          text-align: left;
+          border-bottom: 1px solid #ddd;
+        }
+        th {
+          background-color: #f2f2f2;
+        }
+      `}</style>
+    </div>
   );
 }
